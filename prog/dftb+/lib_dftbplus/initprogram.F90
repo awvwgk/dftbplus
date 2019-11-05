@@ -1052,6 +1052,7 @@ contains
   #:if WITH_DFTD3
     type(DispDftD3), allocatable :: dftd3
   #:endif
+    type(DispDftD4), allocatable :: dftd4
 
     ! H5 correction
     type(H5Corr), allocatable :: pH5Correction
@@ -2001,6 +2002,15 @@ contains
         end if
         call move_alloc(dftd3, dispersion)
     #:endif
+      elseif (allocated(input%ctrl%dispInp%dftd4)) then
+        allocate(dftd4)
+        if (tPeriodic) then
+          call init(dftd4, input%ctrl%dispInp%dftd4, nAtom, species0, speciesName, &
+             &      latVec)
+        else
+          call init(dftd4, input%ctrl%dispInp%dftd4, nAtom, species0, speciesName)
+        end if
+        call move_alloc(dftd4, dispersion)
       end if
       cutOff%mCutOff = max(cutOff%mCutOff, dispersion%getRCutOff())
 
@@ -2957,6 +2967,8 @@ contains
       type is (DispDftD3)
         write(stdOut, "(A)") "Using DFT-D3 dispersion corrections"
     #:endif
+      type is (DispDftD4)
+        write(stdOut, "(A)") "Using DFT-D4 dispersion corrections"
       class default
         call error("Unknown dispersion model - this should not happen!")
       end select
