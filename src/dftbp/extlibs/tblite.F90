@@ -31,8 +31,10 @@ module dftbp_extlibs_tblite
   use dftbp_type_commontypes, only : TOrbitals
   use dftbp_type_integral, only : TIntegral
 #:if WITH_TBLITE
+  use dftbp_extlibs_tblite_lambda, only : get_fragment, unfold_fragment, guess_bonds
   use mctc_env, only : error_type
   use mctc_io, only : structure_type, new
+  use mctc_io_math, only : matinv_3x3
   use mctc_io_symbols, only : symbol_length
   use tblite_basis_type, only : get_cutoff, basis_type
   use tblite_context_type, only : context_type
@@ -84,6 +86,12 @@ module dftbp_extlibs_tblite
     !> Selected method
     integer :: method
 
+    !> Interaction strength scaling
+    real(dp) :: lambda = 1.0_dp
+
+    !> Electronic temperature
+    real(dp) :: elecTemp
+
   end type TTBLiteInput
 
 
@@ -110,6 +118,15 @@ module dftbp_extlibs_tblite
 
     !> Reuseable data for Dispersion interactions
     type(dispersion_cache) :: dcache
+
+    !> Substructure of the fragments
+    type(structure_type), allocatable :: fmol(:)
+
+    !> Parametrisation data for fragments
+    type(xtb_calculator), allocatable :: fcalc(:)
+
+    !> Wavefunction data for fragments
+    type(wavefunction_type), allocatable :: fwfn(:)
   #:endif
 
     !> Mapping between species and identifiers
@@ -145,11 +162,23 @@ module dftbp_extlibs_tblite
     !> Electrostatic energy
     real(dp) :: ees
 
+    !> Fragment energy
+    real(dp) :: fenergy
+
     !> Contributions to the gradient
     real(dp), allocatable :: gradient(:, :)
 
     !> Contributions to the virial
     real(dp) :: sigma(3, 3)
+
+    !> Scaling of interaction strength
+    real(dp) :: lambda
+
+    !> Fragment indices
+    integer, allocatable :: fragment(:)
+
+    !> Bond orders
+    real(dp), allocatable :: bonds(:, :)
 
   contains
 
@@ -164,6 +193,9 @@ module dftbp_extlibs_tblite
 
     !> Get energy contributions
     procedure :: getEnergies
+
+    !> Get energy contributions in parts
+    procedure :: getEnergyParts
 
     !> Get force contributions
     procedure :: addGradients
@@ -233,8 +265,11 @@ contains
     real(dp), intent(in), optional :: latVecs(:,:)
 
   #:if WITH_TBLITE
+    real(dp), parameter :: thr = 0.1_dp
     type(scf_info) :: info
     character(len=symbol_length), allocatable :: symbol(:)
+    integer :: nfrag, ifr
+    real(dp), parameter :: ktoau = 3.166808578545117e-06_dp, etemp = 300.0_dp * ktoau
 
     symbol = speciesNames(species0)
     call new(this%mol, symbol, coords0, lattice=latVecs)
@@ -262,7 +297,7 @@ contains
     end if
 
     call new_wavefunction(this%wfn, this%mol%nat, this%calc%bas%nsh, this%calc%bas%nao, &
-        & 0.0_dp)
+        & input%elecTemp)
 
     call new_potential(this%pot, this%mol, this%calc%bas)
 
@@ -277,10 +312,47 @@ contains
 
     allocate(this%sp2id(maxval(species0)))
     call getSpeciesIdentifierMap(this%sp2id, species0, this%mol%id)
+
+    this%lambda = input%lambda
+    if (this%lambda /= 1.0_dp) then
+      allocate(this%fragment(this%mol%nat))
+      allocate(this%bonds(this%mol%nat, this%mol%nat))
+
+      call guess_bonds(this%mol, this%bonds)
+      call get_fragment(this%fragment, this%bonds, thr)
+
+      nfrag = maxval(this%fragment)
+      allocate(this%fmol(nfrag), this%fcalc(nfrag), this%fwfn(nfrag))
+      do ifr = 1, nfrag
+        call collectFragment(this%fmol(ifr), this%mol, this%fragment == ifr)
+        call getCalculator(input%method, this%fmol(ifr), this%fcalc(ifr))
+        call new_wavefunction(this%fwfn(ifr), this%fmol(ifr)%nat, this%fcalc(ifr)%bas%nsh, &
+          & this%fcalc(ifr)%bas%nao, input%elecTemp)
+      end do
+    end if
   #:else
     call notImplementedError
   #:endif
   end subroutine TTBLite_init
+
+
+#:if WITH_TBLITE
+  subroutine getCalculator(method, mol, calc)
+    integer, intent(in) :: method
+    type(xtb_calculator), intent(out) :: calc
+    type(structure_type), intent(in) :: mol
+    select case(method)
+    case default
+      call error("Unknown method selector")
+    case(tbliteMethod%gfn2xtb)
+      call new_gfn2_calculator(calc, mol)
+    case(tbliteMethod%gfn1xtb)
+      call new_gfn1_calculator(calc, mol)
+    case(tbliteMethod%ipea1xtb)
+      call new_ipea1_calculator(calc, mol)
+    end select
+  end subroutine getCalculator
+#:endif
 
 
   subroutine getSpeciesIdentifierMap(sp2id, species, id)
@@ -359,6 +431,7 @@ contains
     this%ehal = 0.0_dp
     this%erep = 0.0_dp
     this%edisp = 0.0_dp
+    this%fenergy = 0.0_dp
     this%gradient(:, :) = 0.0_dp
     this%sigma(:, :) = 0.0_dp
 
@@ -393,10 +466,80 @@ contains
 
     call get_selfenergy(this%calc%h0, this%mol%id, this%calc%bas%ish_at, &
         & this%calc%bas%nsh_id, cn=this%cn, selfenergy=this%selfenergy, dsedcn=this%dsedcn)
+
+    this%gradient = this%lambda * this%gradient
+    this%sigma = this%lambda * this%sigma
+
+    if (allocated(this%fragment)) then
+      call updateFragments(this)
+    end if
   #:else
     call notImplementedError
   #:endif
   end subroutine updateCoords
+
+
+#:if WITH_TBLITE
+  subroutine updateFragments(this)
+
+    !> Data structure
+    class(TTBLite), intent(inout) :: this
+
+    integer :: ifr
+    real(dp), parameter :: accuracy = 1.0_dp, thr = 0.1_dp
+    real(dp) :: fenergy, fsigma(3, 3), invlat(3, 3)
+    real(dp), allocatable :: fgradient(:, :), abc(:, :), xyz(:, :)
+    integer :: iat, jat
+
+    xyz = this%mol%xyz
+    if (any(this%mol%periodic)) then
+      invlat = matinv_3x3(this%mol%lattice)
+      abc = matmul(invlat, this%mol%xyz)
+      call unfold_fragment(abc, this%bonds, thr)
+      this%mol%xyz(:, :) = matmul(this%mol%lattice, abc)
+    end if
+
+    this%fenergy = 0.0_dp
+    do ifr = 1, maxval(this%fragment)
+      call collectFragment(this%fmol(ifr), this%mol, this%fragment == ifr)
+
+      allocate(fgradient(3, this%fmol(ifr)%nat))
+
+      call xtb_singlepoint(this%ctx, this%fmol(ifr), this%fcalc(ifr), this%fwfn(ifr), &
+          & accuracy, fenergy, fgradient, fsigma, verbosity=1)
+
+      this%fenergy = this%fenergy + fenergy
+      this%sigma = this%sigma + (1.0_dp - this%lambda) * fsigma
+      jat = 0
+      do iat = 1, this%mol%nat
+        if (this%fragment(iat) /= ifr) cycle
+        jat = jat + 1
+        this%gradient(:, iat) = this%gradient(:, iat) + (1.0_dp-this%lambda)*fgradient(:, jat)
+      end do
+      deallocate(fgradient)
+    end do
+    this%mol%xyz(:, :) = xyz
+  end subroutine updateFragments
+
+
+  subroutine collectFragment(frag, mol, mask)
+    !> Molecular structure data of the fragment
+    type(structure_type), intent(out) :: frag
+    !> Molecular structure data of the full system
+    type(structure_type), intent(in) :: mol
+    !> Atom resolved mask for this fragment
+    logical, intent(in) :: mask(:)
+
+    integer :: nat
+    integer, allocatable :: num(:)
+    real(dp), allocatable :: xyz(:, :)
+
+    nat = count(mask)
+    num = pack(mol%num(mol%id), mask)
+    xyz = reshape(pack(mol%xyz, spread(mask, 1, 3)), [3, nat])
+    call new(frag, num, xyz)
+  end subroutine collectFragment
+#:endif
 
 
   !> Update internal copy of lattice vectors
@@ -426,11 +569,38 @@ contains
     real(dp), intent(out) :: energies(:)
 
   #:if WITH_TBLITE
-    energies(:) = (this%ehal + this%erep + this%edisp + this%escd + this%ees) / size(energies)
+    energies(:) = (this%ehal + this%erep + this%edisp + this%escd + this%ees) &
+        & / size(energies)
   #:else
     call notImplementedError
   #:endif
   end subroutine getEnergies
+
+
+  !> Get energy contributions in parts
+  subroutine getEnergyParts(this, ecls, escc, efrg)
+
+    !> Data structure
+    class(TTBLite), intent(in) :: this
+
+    !> Classical contributions from this container
+    real(dp), intent(out) :: ecls
+
+    !> Classical contributions from this container
+    real(dp), intent(out) :: escc
+
+    !> Classical contributions from this container
+    real(dp), intent(out) :: efrg
+
+  #:if WITH_TBLITE
+    ecls = this%ehal + this%erep + this%edisp
+    escc = this%escd + this%ees
+    efrg = this%fenergy
+  #:else
+    call notImplementedError
+  #:endif
+  end subroutine getEnergyParts
+
 
 
   !> Get force contributions
@@ -1298,21 +1468,21 @@ contains
     integer :: nAtom, iAtFirst, iAtLast
     real(dp), allocatable :: gradient(:, :), sigma(:, :), dEdcn(:)
 
-    if (allocated(this%calc%coulomb)) then
-      call this%calc%coulomb%get_gradient(this%mol, this%cache, this%wfn, this%gradient, &
-          & this%sigma)
-    end if
-
-    if (allocated(this%calc%dispersion)) then
-      call this%calc%dispersion%get_gradient(this%mol, this%dcache, this%wfn, this%gradient, &
-          & this%sigma)
-    end if
-
     nAtom = size(nNeighbour)
     allocate(gradient(3, nAtom), sigma(3, 3), dEdcn(nAtom))
     gradient(:, :) = 0.0_dp
     sigma(:, :) = 0.0_dp
     dEdcn(:) = 0.0_dp
+
+    if (allocated(this%calc%coulomb)) then
+      call this%calc%coulomb%get_gradient(this%mol, this%cache, this%wfn, gradient, &
+          & sigma)
+    end if
+
+    if (allocated(this%calc%dispersion)) then
+      call this%calc%dispersion%get_gradient(this%mol, this%dcache, this%wfn, gradient, &
+          & sigma)
+    end if
 
     call distributeRangeInChunks(env, 1, nAtom, iAtFirst, iAtLast)
 
@@ -1330,8 +1500,8 @@ contains
     call gemv(gradient, this%dcndr, dEdcn, beta=1.0_dp)
     call gemv(sigma, this%dcndL, dEdcn, beta=1.0_dp)
 
-    this%gradient(:, :) = this%gradient + gradient
-    this%sigma(:, :) = this%sigma + sigma
+    this%gradient(:, :) = this%gradient + this%lambda * gradient
+    this%sigma(:, :) = this%sigma + this%lambda * sigma
   #:else
     call notImplementedError
   #:endif

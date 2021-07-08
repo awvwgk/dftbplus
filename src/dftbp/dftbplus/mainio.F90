@@ -30,6 +30,7 @@ module dftbp_dftbplus_mainio
   use dftbp_elecsolvers_elecsolvers, only : TElectronicSolver, electronicSolverTypes
   use dftbp_extlibs_xmlf90, only : xmlf_t, xml_OpenFile, xml_ADDXMLDeclaration, xml_NewElement,&
       & xml_EndElement, xml_Close
+  use dftbp_extlibs_tblite, only : TTBLite
   use dftbp_io_charmanip, only : i2c
   use dftbp_io_fileid, only : getFileId 
   use dftbp_io_formatout, only : writeXYZFormat, writeGenFormat, writeSparse, writeSparseAsSquare
@@ -3662,7 +3663,7 @@ contains
   !> Second group of output data during molecular dynamics
   subroutine writeMdOut2(fd, tStress, tPeriodic, tBarostat, isLinResp, eField, tFixEf,&
       & tPrintMulliken, energy, energiesCasida, latVec, cellVol, cellPressure, pressure, tempIon,&
-      & qOutput, q0, dipoleMoment, solvation)
+      & qOutput, q0, dipoleMoment, solvation, tblite)
 
     !> File ID
     integer, intent(in) :: fd
@@ -3721,6 +3722,9 @@ contains
     !> Instance of the solvation model
     class(TSolvation), intent(in), allocatable :: solvation
 
+    !> Library interface
+    type(TTBLite), intent(in), optional :: tblite
+
     integer :: ii
     character(lc) :: strTmp
 
@@ -3765,6 +3769,15 @@ contains
         write(fd, format1U1e) 'External E field', eField%absEField, 'au',&
             & eField%absEField * au__V_m, 'V/m'
       end if
+    end if
+    if (present(tblite)) then
+      block
+        real(dp) :: ecls, escc, efrg
+        call tblite%getEnergyParts(ecls, escc, efrg)
+        write(fd, format2U) 'Intermolecular Energy', energy%EMermin - efrg, 'H', &
+            & (energy%EMermin - efrg) * Hartree__eV, 'eV'
+        write(fd, format2U) 'Intramolecular Energy', efrg, 'H', efrg * Hartree__eV, 'eV'
+      end block
     end if
     if (tFixEf .and. tPrintMulliken) then
       write(fd, "(A, F14.8)") 'Net charge: ', sum(q0(:, :, 1) - qOutput(:, :, 1))

@@ -1780,6 +1780,8 @@ contains
       ctrl%tbliteInp%method = tbliteMethod%ipea1xtb
     end select
 
+    call getChildValue(node, "Lambda", ctrl%tbliteInp%lambda, 1.0_dp, child=child)
+
     call getChildValue(node, "ShellResolvedSCC", ctrl%tShellResolved, .true.)
 
     ! SCC parameters
@@ -5093,6 +5095,7 @@ contains
       select case(ctrl%hamiltonian)
       case(hamiltonianTypes%xtb)
         call readFilling(hamNode, ctrl, geo, 300.0_dp*Boltzmann)
+        ctrl%tbliteInp%elecTemp = ctrl%tempElec
       case(hamiltonianTypes%dftb)
         call readFilling(hamNode, ctrl, geo, 0.0_dp)
       end select
