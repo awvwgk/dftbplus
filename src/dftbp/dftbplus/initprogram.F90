@@ -439,7 +439,7 @@ module dftbp_dftbplus_initprogram
     !> is this a two component calculation (spin orbit or non-collinear spin)
     logical :: t2Component
 
-    !> Common Fermi level accross spin channels
+    !> Common Fermi level across spin channels
     logical :: tSpinSharedEf
 
 
@@ -1065,7 +1065,7 @@ module dftbp_dftbplus_initprogram
     !> Correction for {O,N}-X bonds
     type(THalogenX), allocatable :: halogenXCorrection
 
-    !> All of the excited energies actuall solved by Casida routines (if used)
+    !> All of the excited energies actually solved by Casida routines (if used)
     real(dp), allocatable :: energiesCasida(:)
 
     !> Type for determinant control in DFTB (Delta DFTB)
@@ -1092,7 +1092,7 @@ module dftbp_dftbplus_initprogram
     !> Boundary condition
     integer :: boundaryCond
 
-    !> Whether the order of the atoms matter. Typically the case, when properites were specified
+    !> Whether the order of the atoms matter. Typically the case, when properties were specified
     !> based on atom numbers (e.g. custom occupations). In that case setting a different order
     !> of the atoms via the API is forbidden.
     logical :: atomOrderMatters = .false.
@@ -1263,7 +1263,7 @@ contains
     type(TPoissonInput), allocatable :: poissonInput
 
     logical :: tInitialized, tGeoOptRequiresEgy
-    type(TStatus) :: status
+    type(TStatus) :: errStatus
 
     !> Format for two using exponential notation values with units
     character(len=*), parameter :: format2Ue = "(A, ':', T30, E14.6, 1X, A, T50, E14.6, 1X, A)"
@@ -1393,7 +1393,7 @@ contains
   #:if WITH_MPI
 
     if (input%ctrl%parallelOpts%nGroup > nIndepHam * this%nKPoint) then
-      write(stdOut, *)"Parallel groups only relevant for tasks split over sufficent spins and/or&
+      write(stdOut, *)"Parallel groups only relevant for tasks split over sufficient spins and/or&
           & k-points"
       write(tmpStr,"('Nr. groups:',I4,', Nr. indepdendent spins times k-points:',I4)")&
           & input%ctrl%parallelOpts%nGroup, nIndepHam * this%nKPoint
@@ -1406,12 +1406,12 @@ contains
 
   #:if WITH_SCALAPACK
     call this%initScalapack(input%ctrl%parallelOpts%blacsOpts, this%nAtom, this%nOrb,&
-        & this%t2Component, env, status)
-    if (status%hasError()) then
-      if (status%code == -1) then
-        call warning("Insufficent atoms for this number of MPI processors")
+        & this%t2Component, env, errStatus)
+    if (errStatus%hasError()) then
+      if (errStatus%code == -1) then
+        call warning("Insufficient atoms for this number of MPI processors")
       end if
-      call error(status%message)
+      call error(errStatus%message)
     end if
   #:endif
     call TParallelKS_init(this%parallelKS, env, this%nKPoint, nIndepHam)
@@ -1667,7 +1667,7 @@ contains
     call TMultipole_init(this%multipoleOut, this%nAtom, this%nDipole, this%nQuadrupole)
     this%multipoleInp = this%multipoleOut
 
-    ! Intialize Hamilton and overlap
+    ! Initialize Hamilton and overlap
     this%tImHam = this%tDualSpinOrbit .or. (this%tSpinOrbit .and. allocated(this%dftbU))
     if (this%tSccCalc .and. .not.allocated(this%reks)) then
       allocate(this%chargePerShell(this%orb%mShell,this%nAtom,this%nSpin))
@@ -2223,17 +2223,17 @@ contains
     if (this%isDFTBPT) then
       this%isStatEResp = input%ctrl%isStatEPerturb
       if (this%tNegf) then
-        call error("Currently the perturbation expresions for NEGF are not implemented")
+        call error("Currently the perturbation expressions for NEGF are not implemented")
       end if
       if (.not. this%electronicSolver%providesEigenvals) then
         call error("Perturbation expression for polarisability require eigenvalues and&
             & eigenvectors")
       end if
       if (this%tPeriodic) then
-        call error("Currently the perturbation expresions periodic systems are not implemented")
+        call error("Currently the perturbation expressions periodic systems are not implemented")
       end if
       if (this%tHelical) then
-        call error("Currently the perturbation expresions periodic systems are not implemented")
+        call error("Currently the perturbation expressions periodic systems are not implemented")
       end if
       if (this%t3rd) then
         call error("Only full 3rd order currently supported for perturbation")
@@ -2576,7 +2576,7 @@ contains
 
     if (this%tNegf) then
       if (allocated(this%dispersion)) then
-        call error("Dispersion not currently avalable with transport calculations")
+        call error("Dispersion not currently available with transport calculations")
       end if
       if (this%isLinResp) then
         call error("Linear response is not compatible with transport calculations")
@@ -2980,6 +2980,15 @@ contains
         call error("Magma-solver selected, but program was compiled without MAGMA")
       #:endif
     endif
+
+    if(this%isLinResp) then
+       if(input%ctrl%lrespini%tUseArpack) then
+          write(stdOut, "(A,':',T30,A)")    "Casida solver", "Arpack"
+       else
+          write(stdOut, "(A,':',T30,A,i4)") "Casida solver", &
+          & "Stratmann, SubSpace: ", input%ctrl%lrespini%subSpaceFactorStratmann 
+       end if
+    end if
 
     if (this%tSccCalc .and. .not.this%tRestartNoSC) then
       if (.not. allocated(this%reks)) then
@@ -3521,9 +3530,9 @@ contains
           & this%nAtom, this%cutOff%skCutoff, this%cutOff%mCutoff, this%atomEigVal,&
           & this%dispersion, this%nonSccDeriv, this%tPeriodic, this%parallelKS, this%tRealHS,&
           & this%kPoint, this%kWeight, this%isRangeSep, this%scc, this%tblite, this%solvation,&
-          & status)
-      if (status%hasError()) then
-        call error(status%message)
+          & errStatus)
+      if (errStatus%hasError()) then
+        call error(errStatus%message)
       end if
 
     end if
@@ -4172,7 +4181,7 @@ contains
       end if
     end do
 
-    ! Check for atom(s) occuring in multiple contacts
+    ! Check for atom(s) occurring in multiple contacts
     do ii = 1, transpar%ncont
       do jj = 1, transpar%ncont
         if (ii == jj) then
@@ -4265,7 +4274,7 @@ contains
   end subroutine createRandomGenerators
 
 #:if WITH_SOCKETS
-  !> Initializes the socket and recieves and broadcasts initial geometry.
+  !> Initializes the socket and receives and broadcasts initial geometry.
   subroutine initSocket(this, env, socketInput)
 
     !> Instance
@@ -4715,7 +4724,7 @@ contains
   #!
 
   !> Initialise parallel large matrix decomposition methods
-  subroutine initScalapack(this, blacsOpts, nAtom, nOrb, t2Component, env, status)
+  subroutine initScalapack(this, blacsOpts, nAtom, nOrb, t2Component, env, errStatus)
 
     !> Instance
     class(TDftbPlusMain), intent(inout) :: this
@@ -4732,11 +4741,11 @@ contains
     !> Is this a two component calculation
     logical, intent(in) :: t2Component
 
-    !> Computing enviroment data
+    !> Computing environment data
     type(TEnvironment), intent(inout) :: env
 
     !> Operation status, if an error needs to be returned
-    type(TStatus), intent(inout) :: status
+    type(TStatus), intent(inout) :: errStatus
 
     integer :: sizeHS
 
@@ -4745,8 +4754,8 @@ contains
     else
       sizeHS = nOrb
     end if
-    call env%initBlacs(blacsOpts%blockSize, blacsOpts%blockSize, sizeHS, nAtom, status)
-    @:PROPAGATE_ERROR(status)
+    call env%initBlacs(blacsOpts%blockSize, blacsOpts%blockSize, sizeHS, nAtom, errStatus)
+    @:PROPAGATE_ERROR(errStatus)
 
   end subroutine initScalapack
 
@@ -5186,7 +5195,7 @@ contains
     end if
 
     if (nspin > 2) then
-      call error("Linear reponse does not work with non-colinear spin polarization yet")
+      call error("Linear response does not work with non-colinear spin polarization yet")
     end if
 
     if (tSpinOrbit) then
@@ -5596,12 +5605,12 @@ contains
 
     write (stdOut,*)
     write (stdOut,*)
-    write (stdOut, "(A,':',T30,A)") "REKS Calcuation", "Yes"
+    write (stdOut, "(A,':',T30,A)") "REKS Calculation", "Yes"
 
     select case (reks%reksAlg)
     case (reksTypes%noReks)
     case (reksTypes%ssr22)
-      write (stdOut, "(A,':',T30,A)") "SSR(2,2) Calcuation", "Yes"
+      write (stdOut, "(A,':',T30,A)") "SSR(2,2) Calculation", "Yes"
       if (reks%Efunction == 1) then
         write (stdOut, "(A,':',T30,A)") "Energy Functional", "PPS"
       else if (reks%Efunction == 2) then

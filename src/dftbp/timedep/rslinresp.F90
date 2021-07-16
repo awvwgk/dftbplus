@@ -728,7 +728,8 @@ contains
       & rNel, iNeighbor, img2CentCell, orb, rsData, tWriteTagged, fdTagged, taggedWriter,&
       & fdMulliken, fdCoeffs, fdXplusY, fdTrans, fdSPTrans, fdTraDip, fdTransQ, tArnoldi,&
       & fdArnoldi, fdExc, tEnergyWindow, energyWindow, tOscillatorWindow, oscillatorWindow,&
-      & tCacheCharges, omega, shift, skHamCont, skOverCont, derivator, deltaRho, excGrad, dQAtomEx)
+      & tCacheChargesOccVir, tCacheChargesSame, omega, shift, skHamCont, skOverCont, derivator,&
+      & deltaRho, excGrad, dQAtomEx)
     logical, intent(in) :: spin
     logical, intent(in) :: tOnsite
     integer, intent(in) :: nAtom, iAtomStart(:)
@@ -778,7 +779,8 @@ contains
     !real(dp), intent(in) :: ons_en(:,:), ons_dip(:,:)
     logical, intent(in) :: tEnergyWindow, tOscillatorWindow
     real(dp), intent(in) :: energyWindow, oscillatorWindow
-    logical, intent(in) :: tCacheCharges
+    logical, intent(in) :: tCacheChargesOccVir
+    logical, intent(in) :: tCacheChargesSame
     real(dp), intent(out) :: omega
     real(dp), intent(in), optional :: shift(:)
     real(dp), intent(inout), optional :: deltaRho(:,:)
@@ -931,7 +933,7 @@ contains
     nXvv_max = maxval(nxvvUD)
 
     if (nExc + 1 >= nXov) then
-      write(tmpStr,"(' Insufficent single particle excitations, ', I0,&
+      write(tmpStr,"(' Insufficient single particle excitations, ', I0,&
           & ', for required number of excited states ', I0)") nXov, nExc
       call error(tmpStr)
     end if
@@ -1072,7 +1074,8 @@ contains
     nXovRD = max(nXovRD, min(nExc+1, nXov))
 
     call TTransCharges_init(transChrg, iAtomStart, sTimesGrndEigVecs, grndEigVecs,&
-        & nXovRD, nXovUD(1), nXooUD, nXvvUD, getIA, getIJ, getAB, win, tCacheCharges)
+        & nXovRD, nXovUD(1), nXooUD, nXvvUD, getIA, getIJ, getAB, win,            &
+        & tCacheChargesOccVir, tCacheChargesSame)
 
     !if (nStat == 0) then
     !  if(tTrans) then
@@ -1295,7 +1298,7 @@ contains
     allocate(vecXpYtest(size(evec,dim=1), size(evec,dim=2)))
 
     ! initial allocations
-    ! start with lowest excitations. Inital number somewhat arbritary.
+    ! start with lowest excitations. Initial number somewhat arbritary.
     subSpaceDim = min(initExc, nXov)
     memDim = min(subSpaceDim + 6 * nExc, nXov) ! memory available for subspace calcs.
     workDim = 3 * memDim + 1
@@ -1551,7 +1554,7 @@ contains
 
   !> Write out transitions from ground to excited state along with single particle transitions
   !> and dipole strengths
-  !> Modified routine because some expresions in original routine don't apply in the RS case
+  !> Modified routine because some expressions in original routine don't apply in the RS case
   subroutine writeExcitationsRS(cSym, oscStrength, nExc, nMatUp, getIA, win, eval, mXpYall, wIJ,&
       & fdXplusY, fdTrans, fdTraDip, transitionDipoles, tWriteTagged, fdTagged, taggedWriter,&
       & fdExc, Ssq)
@@ -1854,7 +1857,7 @@ contains
           & fdTagged, taggedWriter, this%fdMulliken, this%fdCoeffs, this%fdXplusY, this%fdTrans,&
           & this%fdSPTrans, this%fdTraDip, this%fdTransQ, this%tArnoldi, this%fdArnoldi,&
           & this%fdExc, this%tEnergyWindow, this%energyWindow, this%tOscillatorWindow,&
-          & this%oscillatorWindow, this%tCacheCharges, excEnergy)
+          & this%oscillatorWindow, this%tCacheChargesOccVir, this%tCacheChargesSame, excEnergy)
     else
       allocate(shiftPerAtom(nAtom))
       allocate(shiftPerL(orb%mShell, nAtom))
@@ -1868,8 +1871,9 @@ contains
           & fdTagged, taggedWriter, this%fdMulliken, this%fdCoeffs, this%fdXplusY, this%fdTrans,&
           & this%fdSPTrans, this%fdTraDip, this%fdTransQ, this%tArnoldi, this%fdArnoldi,&
           & this%fdExc, this%tEnergyWindow, this%energyWindow, this%tOscillatorWindow,&
-          & this%oscillatorWindow, this%tCacheCharges, excEnergy, shiftPerAtom, skHamCont,&
-          & skOverCont, derivator, deltaRho, excGrad, dQAtomEx)
+          & this%oscillatorWindow, this%tCacheChargesOccVir, this%tCacheChargesSame,&
+          & excEnergy, shiftPerAtom, skHamCont, skOverCont, derivator, deltaRho, excGrad,&
+          & dQAtomEx)
     end if
 
   end subroutine linRespCalcExcitationsRS
