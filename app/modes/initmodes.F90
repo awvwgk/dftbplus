@@ -12,13 +12,13 @@ module modes_initmodes
   use dftbp_common_accuracy, only : dp, lc
   use dftbp_common_atomicmass, only : getAtomicMass
   use dftbp_common_file, only : TFileDescr, openFile, closeFile
-  use dftbp_common_filesystem, only : findFile, getParamSearchPath
+  use dftbp_common_filesystem, only : findFile, joinPathsPrettyErr, getParamSearchPaths
   use dftbp_common_globalenv, only : stdOut
   use dftbp_common_release, only : releaseYear
   use dftbp_common_unitconversion, only : massUnits
   use dftbp_extlibs_xmlf90, only : fnode, fNodeList, string, char, getLength, getItem1,&
       & getNodeName, destroyNode, destroyNodeList, textNodeName
-  use dftbp_io_charmanip, only : i2c, tolower, unquote
+  use dftbp_io_charmanip, only : i2c, newline, tolower, unquote
   use dftbp_io_formatout, only : printDftbHeader
   use dftbp_io_hsdparser, only : parseHSD, dumpHSD
   use dftbp_io_hsdutils, only : getChild, getChildValue, getChildren, getSelectedAtomIndices,&
@@ -38,6 +38,7 @@ module modes_initmodes
   public :: geo, atomicMasses, dynMatrix, bornMatrix, bornDerivsMatrix, modesToPlot, nModesToPlot
   public :: nCycles, nSteps, nMovedAtom, iMovedAtoms, nDerivs
   public :: tVerbose, tPlotModes, tEigenVectors, tAnimateModes, tRemoveTranslate, tRemoveRotate
+  public :: setEigvecGauge
 
 
   !> Program version
@@ -129,11 +130,11 @@ contains
     integer :: ii, iSp1, iAt
     real(dp), allocatable :: speciesMass(:), replacementMasses(:)
     type(TListCharLc), allocatable :: skFiles(:)
-    character(lc) :: prefix, suffix, separator, elem1, strTmp, filename
-    logical :: tLower, tExist, tDumpPHSD
+    character(lc) :: prefix, suffix, separator, elem1, strTmp, str2Tmp, filename
+    logical :: tLower, tDumpPHSD
     logical :: tWriteHSD
     type(string), allocatable :: searchPath(:)
-    character(len=:), allocatable :: strOut, hessianFile
+    character(len=:), allocatable :: strOut, strJoin, hessianFile
     type(TFileDescr) :: file
     integer :: iErr
 
@@ -181,7 +182,8 @@ contains
     nCycles = 3
 
     ! Slater-Koster files
-    call getParamSearchPath(searchPath)
+    call getParamSearchPaths(searchPath)
+    strJoin = joinPathsPrettyErr(searchPath)
     allocate(speciesMass(geo%nSpecies))
     speciesMass(:) = 0.0_dp
     do iSp1 = 1, geo%nSpecies
@@ -213,16 +215,18 @@ contains
           end if
           strTmp = trim(prefix) // trim(elem1) // trim(separator) // trim(elem1) // trim(suffix)
           call findFile(searchPath, strTmp, strOut)
-          if (allocated(strOut)) strTmp = strOut
-          call append(skFiles(iSp1), strTmp)
-          inquire(file=strTmp, exist=tExist)
-          if (.not. tExist) then
+          if (.not. allocated(strOut)) then
             call detailedError(value, "SK file with generated name '" // trim(strTmp)&
-                & // "' does not exist.")
+                & // "' not found." // newline // "   (search path(s): " // strJoin // ").")
           end if
+          strTmp = strOut
+          call append(skFiles(iSp1), strTmp)
         end do
       case default
         call setUnprocessed(value)
+        call getChildValue(child, "Prefix", buffer2, "")
+        prefix = unquote(char(buffer2))
+
         do iSp1 = 1, geo%nSpecies
           strTmp = trim(geo%speciesNames(iSp1)) // "-" // trim(geo%speciesNames(iSp1))
           call init(lStr)
@@ -232,11 +236,14 @@ contains
             call detailedError(child2, "Incorrect number of Slater-Koster files")
           end if
           do ii = 1, len(lStr)
-            call get(lStr, strTmp, ii)
-            inquire(file=strTmp, exist=tExist)
-            if (.not. tExist) then
-              call detailedError(child2, "SK file '" // trim(strTmp) // "' does not exist'")
+            call get(lStr, str2Tmp, ii)
+            strTmp = trim(prefix) // str2Tmp
+            call findFile(searchPath, strTmp, strOut)
+            if (.not. allocated(strOut)) then
+              call detailedError(child2, "SK file '" // trim(strTmp) // "' not found." // newline&
+                  & // "   (search path(s): " // strJoin // ").")
             end if
+            strTmp = strOut
             call append(skFiles(iSp1), strTmp)
           end do
           call destruct(lStr)
@@ -430,5 +437,29 @@ contains
     call destroyNodeList(children)
 
   end subroutine getInputMasses
+
+
+  !> Returns gauge-corrected eigenvectors, such that the first non-zero coefficient of each mode is
+  !! positive.
+  subroutine setEigvecGauge(eigvec)
+
+    !> Gauge corrected eigenvectors on exit. Shape: [iCoeff, iMode]
+    real(dp), intent(inout) :: eigvec(:,:)
+
+    !! Auxiliary variables
+    integer :: iMode, iCoeff
+
+    do iMode = 1, size(eigvec, dim=2)
+      lpCoeff: do iCoeff = 1, size(eigvec, dim=1)
+        if (abs(eigvec(iCoeff, iMode)) > 1e2_dp * epsilon(1.0_dp)) then
+          if (sign(1.0_dp, eigvec(iCoeff, iMode)) < 0.0_dp) then
+            eigvec(:, iMode) = -eigvec(:, iMode)
+          end if
+          exit lpCoeff
+        end if
+      end do lpCoeff
+    end do
+
+  end subroutine setEigvecGauge
 
 end module modes_initmodes
